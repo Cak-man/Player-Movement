@@ -1,0 +1,230 @@
+using UnityEngine;
+
+[RequireComponent(typeof(CharacterController))]
+public class PlayerMovement : MonoBehaviour
+{
+    [Header("Hareket Ayarları")]
+    public float walkSpeed = 6f;
+    public float runSpeed = 12f;
+    public float jumpPower = 7f;
+    public float gravity = 10f;
+
+    [Header("Hızlanma Ayarları")]
+    public float acceleration = 8f;
+    public float deceleration = 10f;
+
+    [Header("Kamera Ayarları")]
+    public Transform playerCamera;
+    public float mouseSensitivity = 2f;
+    public float minY = -60f;
+    public float maxY = 60f;
+
+    [Header("Kamera Sallanması (Head Bob)")]
+    public float walkBobSpeed = 10f;
+    public float walkBobAmount = 0.05f;
+    public float runBobSpeed = 14f;
+    public float runBobAmount = 0.1f;
+    public float jumpBobAmount = 0.15f;
+    public float jumpBobReturnSpeed = 8f;
+
+    [Header("Animasyon Ayarları")]
+    public Animator animator;
+    public string idleTrigger = "Idle";
+    public string walkTrigger = "Walk";
+    public string runTrigger = "Run";
+    public string jumpTrigger = "Jump";
+
+    [Header("Ses Ayarları")]
+    public AudioSource audioSource;
+    public AudioClip walkSound;
+    public AudioClip runSound;
+    public AudioClip jumpSound;
+    public AudioClip idleSound;
+
+    // 🔹 CROUCH AYARLARI
+    [Header("Eğilme (Crouch) Ayarları")]
+    public float standingHeight = 1.8f;
+    public float crouchHeight = 1.0f;
+    public float crouchSpeed = 12f;
+    public float standingCameraY = 0.8f;
+    public float crouchCameraY = 0.45f;
+
+    private Vector3 moveDirection = Vector3.zero;
+    private CharacterController characterController;
+    private float rotationX = 0f;
+    private string currentTrigger = "";
+
+    private float currentSpeed = 0f;
+
+    private float bobTimer = 0f;
+    private Vector3 cameraStartLocalPos;
+    private float jumpBobOffset = 0f;
+
+    private bool isCrouching = false;
+
+    void Start()
+    {
+        characterController = GetComponent<CharacterController>();
+
+        if (animator == null)
+            animator = GetComponent<Animator>();
+
+        if (audioSource == null)
+            audioSource = GetComponent<AudioSource>();
+
+        cameraStartLocalPos = playerCamera.localPosition;
+
+        // 🔹 SADECE HEIGHT AYARLANIR – CENTER DOKUNULMAZ
+        characterController.height = standingHeight;
+
+        Vector3 camPos = playerCamera.localPosition;
+        camPos.y = standingCameraY;
+        playerCamera.localPosition = camPos;
+
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+    }
+
+    void Update()
+    {
+        HandleMouseLook();
+        HandleMovement();
+        HandleCrouch();   // 🔹
+        HandleCameraBob();
+    }
+
+    void HandleMouseLook()
+    {
+        float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity;
+        float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity;
+
+        transform.Rotate(Vector3.up * mouseX);
+
+        rotationX -= mouseY;
+        rotationX = Mathf.Clamp(rotationX, minY, maxY);
+        playerCamera.localRotation = Quaternion.Euler(rotationX, 0f, 0f);
+    }
+
+    void HandleMovement()
+    {
+        float inputX = Input.GetAxisRaw("Horizontal");
+        float inputZ = Input.GetAxisRaw("Vertical");
+
+        Vector3 move = (transform.forward * inputZ + transform.right * inputX).normalized;
+
+        bool isRunning = Input.GetKey(KeyCode.LeftShift);
+        float targetSpeed = isRunning ? runSpeed : walkSpeed;
+
+        if (inputZ != 0 || inputX != 0)
+            currentSpeed = Mathf.MoveTowards(currentSpeed, targetSpeed, acceleration * Time.deltaTime);
+        else
+            currentSpeed = Mathf.MoveTowards(currentSpeed, 0f, deceleration * Time.deltaTime);
+
+        float movementDirectionY = moveDirection.y;
+        moveDirection = move * currentSpeed;
+
+        if (Input.GetButtonDown("Jump") && characterController.isGrounded)
+        {
+            moveDirection.y = jumpPower;
+            SetAnimationTrigger(jumpTrigger);
+            PlaySound(jumpSound, false);
+        }
+        else
+        {
+            moveDirection.y = movementDirectionY;
+        }
+
+        if (!characterController.isGrounded)
+            moveDirection.y -= gravity * Time.deltaTime;
+
+        characterController.Move(moveDirection * Time.deltaTime);
+
+        if (characterController.isGrounded)
+        {
+            if (inputZ != 0 || inputX != 0)
+            {
+                if (isRunning)
+                {
+                    SetAnimationTrigger(runTrigger);
+                    PlaySound(runSound, true);
+                }
+                else
+                {
+                    SetAnimationTrigger(walkTrigger);
+                    PlaySound(walkSound, true);
+                }
+            }
+            else
+            {
+                SetAnimationTrigger(idleTrigger);
+                PlaySound(idleSound, true);
+            }
+        }
+        else
+        {
+            StopSound();
+        }
+    }
+
+    // 🔹 CENTER DEĞİŞTİRMEYEN CROUCH
+    void HandleCrouch()
+    {
+        isCrouching = Input.GetKey(KeyCode.LeftControl);
+
+        float targetHeight = isCrouching ? crouchHeight : standingHeight;
+
+        characterController.height = Mathf.Lerp(
+            characterController.height,
+            targetHeight,
+            Time.deltaTime * crouchSpeed
+        );
+
+        float targetCameraY = isCrouching ? crouchCameraY : standingCameraY;
+        Vector3 camPos = playerCamera.localPosition;
+        camPos.y = Mathf.Lerp(camPos.y, targetCameraY, Time.deltaTime * crouchSpeed);
+        playerCamera.localPosition = camPos;
+    }
+
+    void HandleCameraBob()
+    {
+        if (!characterController.isGrounded)
+            jumpBobOffset = Mathf.Lerp(jumpBobOffset, -jumpBobAmount, Time.deltaTime * jumpBobReturnSpeed);
+        else
+            jumpBobOffset = Mathf.Lerp(jumpBobOffset, 0f, Time.deltaTime * jumpBobReturnSpeed);
+
+        float inputX = Input.GetAxisRaw("Horizontal");
+        float inputZ = Input.GetAxisRaw("Vertical");
+
+        if ((inputZ != 0 || inputX != 0) && characterController.isGrounded)
+        {
+            bool isRunning = Input.GetKey(KeyCode.LeftShift);
+            float bobSpeed = isRunning ? runBobSpeed : walkBobSpeed;
+            float bobAmount = isRunning ? runBobAmount : walkBobAmount;
+
+            bobTimer += Time.deltaTime * bobSpeed;
+            float bobOffsetY = Mathf.Sin(bobTimer) * bobAmount;
+
+            playerCamera.localPosition = new Vector3(
+                cameraStartLocalPos.x,
+                cameraStartLocalPos.y + bobOffsetY + jumpBobOffset,
+                cameraStartLocalPos.z
+            );
+        }
+        else
+        {
+            bobTimer = 0f;
+            playerCamera.localPosition = Vector3.Lerp(
+                playerCamera.localPosition,
+                cameraStartLocalPos + Vector3.up * jumpBobOffset,
+                Time.deltaTime * 6f
+            );
+        }
+    }
+
+    void SetAnimationTrigger(string triggerName)
+    {
+        if (currentTrigger == triggerName) return;
+
+        animator.ResetTrigg...
+
+<...etc...>
